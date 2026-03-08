@@ -1,0 +1,17 @@
+# 環境設定（含 thanm 路徑，不公開）
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# IDE
+.vscode/
+.claude/
+
+# 輸出資料夾
+*_output/
+
+# claude
+*.claude
