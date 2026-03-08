@@ -67,9 +67,9 @@ def process_one(anm_path: Path, output_base: Path) -> bool:
         return False
 
     sheet = load_sheet(anm_path, output_dir)
-    cut_and_save(sheet, sprites, output_dir)
-    print(f"完成，共輸出 {len(sprites)} 個 Sprite 至 {output_dir}/")
-    return True
+    skipped = cut_and_save(sheet, sprites, output_dir)
+    print(f"完成，共輸出 {len(sprites) - skipped} / {len(sprites)} 個 Sprite 至 {output_dir}/")
+    return skipped == 0
 
 
 # ── 2. 解析 Sprite 座標 ───────────────────────────────────────────────────────
@@ -132,7 +132,8 @@ def cut_and_save(
     sheet: Image.Image,
     sprites: list[SpriteInfo],
     output_dir: Path,
-) -> None:
+) -> int:
+    """回傳超出範圍而略過的 Sprite 數量。"""
     sw, sh = sheet.size
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -156,6 +157,8 @@ def cut_and_save(
         error_path = output_dir / "error.txt"
         error_path.write_text("\n".join(skipped), encoding="utf-8")
         print(f"[info]  已將 {len(skipped)} 筆超出範圍記錄至 error.txt")
+
+    return len(skipped)
 
 
 # ── 5. 收集無對應 .anm 的圖片 ────────────────────────────────────────────────
