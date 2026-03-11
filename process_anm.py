@@ -55,29 +55,37 @@ def process_one(anm_path: Path, output_base: Path) -> bool:
     if raw_text is None:
         return False
 
+    name, name2 = parse_entry_names(raw_text)
+    if not name:
+        print("[error] ANM 未包含 Name 欄位，略過", file=sys.stderr)
+        return False
+    print(f"[info]  Name: {name}" + (f"  Name2: {name2}" if name2 else ""))
+
+    base_path = anm_path.parent / name
+    if not base_path.exists():
+        print(f"[error] 找不到主圖：{name}，略過", file=sys.stderr)
+        return False
+
     sprites = parse_sprites(raw_text)
     if not sprites:
         print("[warn]  未找到任何 Sprite，請確認 thanm 輸出格式")
         return False
     print(f"[info]  找到 {len(sprites)} 個 Sprite")
 
-    base_path = anm_path.with_suffix(".png")
-    if not base_path.exists():
-        print(f"[error] 找不到主圖：{base_path.name}，略過", file=sys.stderr)
-        return False
-
-    sheet = load_sheet(anm_path, output_dir)
+    sheet = load_sheet(anm_path.parent, name, name2, output_dir)
     skipped = cut_and_save(sheet, sprites, output_dir)
     print(f"完成，共輸出 {len(sprites) - skipped} / {len(sprites)} 個 Sprite 至 {output_dir}/")
     return skipped == 0
 
 
-# ── 2. 解析 Sprite 座標 ───────────────────────────────────────────────────────
+# ── 2. 解析 ANM 資訊 ─────────────────────────────────────────────────────────
 
 SPRITE_RE = re.compile(
     r"^\s*Sprite:\s*(\d+)\s+(\d+)\*(\d+)\+(\d+)\+(\d+)",
     re.MULTILINE,
 )
+NAME_RE  = re.compile(r"^Name:\s*(.+)$",  re.MULTILINE)
+NAME2_RE = re.compile(r"^Name2:\s*(.+)$", re.MULTILINE)
 
 SpriteInfo = tuple[int, int, int, int, int]  # (index, w, h, x, y)
 
@@ -91,37 +99,45 @@ def parse_sprites(text: str) -> list[SpriteInfo]:
     return sprites
 
 
+def parse_entry_names(text: str) -> tuple[str | None, str | None]:
+    """從第一個 ENTRY 解析 Name 和 Name2，回傳各自的檔案名稱（不含路徑）。"""
+    m1 = NAME_RE.search(text)
+    m2 = NAME2_RE.search(text)
+    name  = Path(m1.group(1).strip()).name if m1 else None
+    name2 = Path(m2.group(1).strip()).name if m2 else None
+    return name, name2
+
+
 # ── 3. 載入並合併遮罩 ─────────────────────────────────────────────────────────
 
-def load_sheet(anm_path: Path, output_dir: Path) -> Image.Image:
+def load_sheet(folder: Path, name: str, name2: str | None, output_dir: Path) -> Image.Image:
     """
-    找 <stem>.png；若存在 <stem>_a.png 則把其灰階值套用為 alpha channel，
-    並將合併後的圖存到 output_dir。
-    找不到遮罩時直接回傳原圖（轉 RGBA）。
+    依 ANM 內的 Name/Name2 在 folder 下找圖片。
+    若 Name2 存在則合併為 alpha channel，並將結果存到 output_dir。
     """
-    stem = anm_path.stem
-    folder = anm_path.parent
-
-    base_path = folder / f"{stem}.png"
-    mask_path = folder / f"{stem}_a.png"
-
+    base_path = folder / name
     base = Image.open(base_path).convert("RGBA")
 
-    if mask_path.exists():
-        mask = Image.open(mask_path).convert("L")
-        if base.size != mask.size:
-            print(
-                f"[warn]  主圖與遮罩尺寸不符 {base.size} vs {mask.size}，略過遮罩",
-                file=sys.stderr,
-            )
+    if name2:
+        mask_path = folder / name2
+        if mask_path.exists():
+            mask = Image.open(mask_path).convert("L")
+            if base.size != mask.size:
+                print(
+                    f"[warn]  主圖與遮罩尺寸不符 {base.size} vs {mask.size}，略過遮罩",
+                    file=sys.stderr,
+                )
+            else:
+                r, g, b, _ = base.split()
+                base = Image.merge("RGBA", (r, g, b, mask))
+                stem = Path(name).stem
+                merged_path = output_dir / f"{stem}_merged.png"
+                base.save(merged_path, "PNG")
+                print(f"[info]  已合併遮罩 {name2}，存至 {merged_path}")
         else:
-            r, g, b, _ = base.split()
-            base = Image.merge("RGBA", (r, g, b, mask))
-            merged_path = output_dir / f"{stem}_merged.png"
-            base.save(merged_path, "PNG")
-            print(f"[info]  已合併遮罩，存至 {merged_path}")
+            print(f"[warn]  找不到遮罩：{name2}，直接使用主圖", file=sys.stderr)
     else:
-        print(f"[info]  無遮罩（{stem}_a.png 不存在），直接使用主圖")
+        print(f"[info]  ANM 無 Name2，直接使用主圖")
 
     return base
 
