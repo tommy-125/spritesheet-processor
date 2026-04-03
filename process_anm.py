@@ -55,11 +55,11 @@ def process_one(anm_path: Path, output_base: Path) -> bool:
     if raw_text is None:
         return False
 
-    name, name2 = parse_entry_names(raw_text)
+    name, name2, virtual_width = parse_entry_names(raw_text)
     if not name:
         print("[error] ANM 未包含 Name 欄位，略過", file=sys.stderr)
         return False
-    print(f"[info]  Name: {name}" + (f"  Name2: {name2}" if name2 else ""))
+    print(f"[info]  Name: {name}" + (f"  Name2: {name2}" if name2 else "") + (f"  VirtualWidth: {virtual_width}" if virtual_width else ""))
 
     base_path = anm_path.parent / name
     if not base_path.exists():
@@ -73,7 +73,7 @@ def process_one(anm_path: Path, output_base: Path) -> bool:
     print(f"[info]  找到 {len(sprites)} 個 Sprite")
 
     sheet = load_sheet(anm_path.parent, name, name2, output_dir)
-    skipped = cut_and_save(sheet, sprites, output_dir)
+    skipped = cut_and_save(sheet, sprites, output_dir, virtual_width)
     print(f"完成，共輸出 {len(sprites) - skipped} / {len(sprites)} 個 Sprite 至 {output_dir}/")
     return skipped == 0
 
@@ -84,8 +84,9 @@ SPRITE_RE = re.compile(
     r"^\s*Sprite:\s*(\d+)\s+(\d+)\*(\d+)\+(\d+)\+(\d+)",
     re.MULTILINE,
 )
-NAME_RE  = re.compile(r"^Name:\s*(.+)$",  re.MULTILINE)
-NAME2_RE = re.compile(r"^Name2:\s*(.+)$", re.MULTILINE)
+NAME_RE  = re.compile(r"^Name:\s*(.+)$",   re.MULTILINE)
+NAME2_RE = re.compile(r"^Name2:\s*(.+)$",  re.MULTILINE)
+WIDTH_RE = re.compile(r"^Width:\s*(\d+)$", re.MULTILINE)
 
 SpriteInfo = tuple[int, int, int, int, int]  # (index, w, h, x, y)
 
@@ -99,13 +100,15 @@ def parse_sprites(text: str) -> list[SpriteInfo]:
     return sprites
 
 
-def parse_entry_names(text: str) -> tuple[str | None, str | None]:
-    """從第一個 ENTRY 解析 Name 和 Name2，回傳各自的檔案名稱（不含路徑）。"""
+def parse_entry_names(text: str) -> tuple[str | None, str | None, int | None]:
+    """從第一個 ENTRY 解析 Name、Name2、Width，回傳 (name, name2, virtual_width)。"""
     m1 = NAME_RE.search(text)
     m2 = NAME2_RE.search(text)
+    mw = WIDTH_RE.search(text)
     name  = Path(m1.group(1).strip()).name if m1 else None
     name2 = Path(m2.group(1).strip()).name if m2 else None
-    return name, name2
+    virtual_width = int(mw.group(1)) if mw else None
+    return name, name2, virtual_width
 
 
 # ── 3. 載入並合併遮罩 ─────────────────────────────────────────────────────────
@@ -148,9 +151,11 @@ def cut_and_save(
     sheet: Image.Image,
     sprites: list[SpriteInfo],
     output_dir: Path,
+    virtual_width: int | None = None,
 ) -> int:
     """回傳超出範圍而略過的 Sprite 數量。"""
     sw, sh = sheet.size
+    vw = virtual_width if virtual_width else sw
     output_dir.mkdir(parents=True, exist_ok=True)
 
     skipped = []
@@ -158,14 +163,16 @@ def cut_and_save(
         filename = f"sprite_{idx}.png"
         dest = output_dir / filename
 
-        # 邊界保護
-        if x < 0 or y < 0 or x + w > sw or y + h > sh:
-            msg = f"sprite_{idx}: 座標超出範圍 ({x},{y}) {w}x{h} / sheet {sw}x{sh}"
+        actual_x = x % vw
+        actual_y = y
+
+        if actual_x < 0 or actual_y < 0 or actual_x + w > sw or actual_y + h > sh:
+            msg = f"sprite_{idx}: 座標超出範圍 ({x},{y}) → 換算後 ({actual_x},{actual_y}) {w}x{h} / sheet {sw}x{sh}"
             print(f"[warn]  {msg}，略過")
             skipped.append(msg)
             continue
 
-        crop = sheet.crop((x, y, x + w, y + h))
+        crop = sheet.crop((actual_x, actual_y, actual_x + w, actual_y + h))
         crop.save(dest, "PNG")
         print(f"已處理 {filename}")
 
